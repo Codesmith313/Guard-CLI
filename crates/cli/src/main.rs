@@ -252,52 +252,15 @@ fn chrono_timestamp() -> String {
     let s = secs % 60;
     let m = (secs / 60) % 60;
     let h = (secs / 3600) % 24;
-    let days = secs / 86400;
-    let (year, month, day) = days_to_ymd(days);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        year, month, day, h, m, s
-    )
+    format!("{h:02}:{m:02}:{s:02} UTC")
 }
 
-/// Convert days since Unix epoch (1970-01-01) to (year, month, day).
-fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
-    let mut year = 1970u64;
-    loop {
-        let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
-    }
-    let months: [u64; 12] = [
-        31,
-        if is_leap(year) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1u64;
-    for &dim in &months {
-        if days < dim {
-            break;
-        }
-        days -= dim;
-        month += 1;
-    }
-    (year, month, days + 1)
+fn effective_fail_on(cli_value: Option<&str>, config_value: Option<&str>) -> String {
+    cli_value.or(config_value).unwrap_or("high").to_string()
 }
 
-fn is_leap(year: u64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+fn is_relevant_watch_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "rs") && !is_ignored_path(path)
 }
 
 /// Emit a setup-time error in the correct format and exit with code 2.
@@ -424,11 +387,8 @@ fn main() {
             // they did not — so we can correctly fall back to the config value
             // without the old `!= "high"` hack that broke explicit --fail-on high
             // (issue #667).
-            let effective_fail_on = if let Some(ref flag) = fail_on {
-                flag.clone()
-            } else {
-                cfg.scan.min_severity.clone().unwrap_or_else(|| "high".to_string())
-            };
+            let effective_fail_on =
+                effective_fail_on(fail_on.as_deref(), cfg.scan.min_severity.as_deref());
             let fail_threshold = match parse_fail_on(&effective_fail_on) {
                 Ok(sev) => sev,
                 Err(bad) => {
@@ -558,7 +518,7 @@ fn main() {
                             ) && event
                                 .paths
                                 .iter()
-                                .any(|p| p.extension().map(|e| e == "rs").unwrap_or(false) && !is_ignored_path(p));
+                                .any(|path| is_relevant_watch_path(path));
 
                             if !is_relevant {
                                 continue;
@@ -575,10 +535,7 @@ fn main() {
                                             EventKind::Create(_)
                                                 | EventKind::Modify(_)
                                                 | EventKind::Remove(_)
-                                        ) && e.paths.iter().any(|p| {
-                                            p.extension().map(|x| x == "rs").unwrap_or(false)
-                                                && !is_ignored_path(p)
-                                        });
+                                        ) && e.paths.iter().any(|path| is_relevant_watch_path(path));
                                         if !relevant {
                                             continue;
                                         }
@@ -1817,6 +1774,29 @@ mod tests {
         assert_eq!(parse_fail_on("high"), Ok(Severity::High));
         assert_eq!(parse_fail_on("medium"), Ok(Severity::Medium));
         assert_eq!(parse_fail_on("low"), Ok(Severity::Low));
+    }
+
+    #[test]
+    fn explicit_high_fail_on_overrides_lower_config_threshold() {
+        assert_eq!(effective_fail_on(Some("high"), Some("low")), "high");
+        assert_eq!(effective_fail_on(None, Some("low")), "low");
+        assert_eq!(effective_fail_on(None, None), "high");
+    }
+
+    #[test]
+    fn watch_path_filter_rejects_ignored_rust_files() {
+        assert!(!is_relevant_watch_path(Path::new("target/generated.rs")));
+        assert!(!is_relevant_watch_path(Path::new(".git/hooks/check.rs")));
+        assert!(is_relevant_watch_path(Path::new("src/lib.rs")));
+        assert!(!is_relevant_watch_path(Path::new("src/README.md")));
+    }
+
+    #[test]
+    fn watch_timestamp_is_time_only_and_explicitly_utc() {
+        let timestamp = chrono_timestamp();
+        assert_eq!(timestamp.len(), "00:00:00 UTC".len());
+        assert!(timestamp.ends_with(" UTC"));
+        assert_eq!(timestamp.bytes().filter(|byte| *byte == b':').count(), 2);
     }
 
     #[test]
