@@ -1105,9 +1105,9 @@ fn list_checks_json() -> Result<String, serde_json::Error> {
 }
 
 fn write_output(path: &Path, payload: &str) -> Result<(), std::io::Error> {
-    // Match the println! convention used for stdout: append a trailing newline
-    // so file contents are byte-for-byte identical to what would be printed.
-    fs::write(path, format!("{payload}\n"))
+    // Match println! while avoiding a second newline when a static payload,
+    // such as STARTER_CONFIG, is already newline-terminated.
+    fs::write(path, format!("{}\n", payload.trim_end_matches('\n')))
 }
 
 /// Count findings bucketed by severity, returned as `(high, medium, low)`.
