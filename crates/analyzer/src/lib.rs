@@ -462,10 +462,14 @@ fn collect_rust_paths(
                 });
             }
         };
-        if !entry.file_type().is_file() {
+        let path = entry.path();
+        let file_type = entry.file_type();
+        // WalkDir reports the link's own type when follow_links(false) is used.
+        // Follow only the final metadata check for file symlinks so linked Rust
+        // sources are scanned without recursively traversing linked directories.
+        if !file_type.is_file() && !(file_type.is_symlink() && path.is_file()) {
             continue;
         }
-        let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }
@@ -742,6 +746,29 @@ mod tests {
         assert!(is_ignored_path(Path::new("crate/target/debug/build.rs")));
         assert!(is_ignored_path(Path::new(".git/hooks/pre-commit.rs")));
         assert!(!is_ignored_path(Path::new("crate/src/lib.rs")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_directory_includes_symlinked_rust_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "soroban-guard-symlink-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(root.join("shared")).unwrap();
+        fs::create_dir_all(root.join("contract/src")).unwrap();
+        fs::write(root.join("shared/token.rs"), "pub fn shared_source() {}\n").unwrap();
+        symlink(root.join("shared/token.rs"), root.join("contract/src/token.rs")).unwrap();
+
+        let (_, files_scanned, files_skipped, check_panics) =
+            scan_directory(&root.join("contract"), &[], &[]).unwrap();
+        assert_eq!(files_scanned, 1);
+        assert_eq!(files_skipped, 0);
+        assert!(check_panics.is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
