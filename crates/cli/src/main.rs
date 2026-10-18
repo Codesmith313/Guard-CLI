@@ -44,7 +44,7 @@ enum Commands {
         #[arg(long)]
         markdown: bool,
         /// Write output to a file instead of stdout (applies to --json, --sarif, and --markdown)
-        #[arg(long)]
+        #[arg(long, requires = "output_format")]
         output: Option<PathBuf>,
         /// Suppress all output unless a finding meets the --fail-on threshold
         #[arg(long)]
@@ -357,15 +357,6 @@ fn main() {
             if no_color || std::env::var_os("NO_COLOR").is_some() {
                 colored::control::set_override(false);
             }
-            // Mutual exclusion
-            let format_count = [json, sarif, markdown].iter().filter(|&&b| b).count();
-            if format_count > 1 {
-                eprintln!(
-                    "{} --json, --sarif, and --markdown are mutually exclusive",
-                    "error:".red().bold()
-                );
-                std::process::exit(2);
-            }
             // Try to load soroban-guard.toml from current directory to get default path.
             let config_for_default = match config::load(&PathBuf::from(".")) {
                 Ok((c, _)) => c.unwrap_or_default(),
@@ -487,15 +478,6 @@ fn main() {
                 includes: include.clone(),
                 max_findings,
             };
-
-            // #671: --output without a structured format flag writes nothing and
-            // produces no visible output — warn the user so the mistake is obvious.
-            if output.is_some() && !json && !sarif && !markdown {
-                eprintln!(
-                    "{} --output has no effect without --json, --sarif, or --markdown",
-                    "warning:".yellow().bold()
-                );
-            }
 
             // Run the initial scan.
             let exit_code = run_scan(&opts, &active_checks);
