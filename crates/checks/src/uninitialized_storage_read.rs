@@ -38,9 +38,7 @@ impl Check for UninitializedStorageReadCheck {
 /// Returns true when `expr` is a `.has(&key)` call on a storage receiver chain.
 fn is_storage_has(expr: &Expr) -> bool {
     match expr {
-        Expr::MethodCall(m) => {
-            m.method == "has" && receiver_chain_contains_storage(&m.receiver)
-        }
+        Expr::MethodCall(m) => m.method == "has" && receiver_chain_contains_storage(&m.receiver),
         _ => false,
     }
 }
@@ -125,9 +123,7 @@ fn has_key_arg(expr: &Expr) -> Option<&Expr> {
 /// call, if any.
 fn get_key_arg(expr: &Expr) -> Option<&Expr> {
     match expr {
-        Expr::MethodCall(m) if m.method == "get" || m.method == "get_unchecked" => {
-            m.args.first()
-        }
+        Expr::MethodCall(m) if m.method == "get" || m.method == "get_unchecked" => m.args.first(),
         _ => None,
     }
 }
@@ -378,7 +374,10 @@ impl C {
 "#,
         )?;
         let hits = UninitializedStorageReadCheck.run(&file, "");
-        assert!(hits.is_empty(), "matching has() guard should suppress finding");
+        assert!(
+            hits.is_empty(),
+            "matching has() guard should suppress finding"
+        );
         Ok(())
     }
 
@@ -403,7 +402,11 @@ impl C {
 "#,
         )?;
         let hits = UninitializedStorageReadCheck.run(&file, "");
-        assert_eq!(hits.len(), 1, "wrong-key has() guard must not suppress the finding");
+        assert_eq!(
+            hits.len(),
+            1,
+            "wrong-key has() guard must not suppress the finding"
+        );
         Ok(())
     }
 
@@ -427,7 +430,11 @@ impl C {
 "#,
         )?;
         let hits = UninitializedStorageReadCheck.run(&file, "");
-        assert_eq!(hits.len(), 1, "has() guard after the read must not suppress the finding");
+        assert_eq!(
+            hits.len(),
+            1,
+            "has() guard after the read must not suppress the finding"
+        );
         Ok(())
     }
 }

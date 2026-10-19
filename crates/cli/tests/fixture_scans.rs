@@ -28,8 +28,9 @@ fn assert_fixture_pair(base: &str, expected_check: &str) {
         "{base}-vulnerable did not produce {expected_check}; findings: {vulnerable:#?}"
     );
 
-    let (safe, _, _, safe_panics) = scan_directory(&fixture_path(&format!("{base}-safe")), &[], &[])
-        .unwrap_or_else(|error| panic!("failed to scan {base}-safe: {error}"));
+    let (safe, _, _, safe_panics) =
+        scan_directory(&fixture_path(&format!("{base}-safe")), &[], &[])
+            .unwrap_or_else(|error| panic!("failed to scan {base}-safe: {error}"));
     assert!(
         safe_panics.is_empty(),
         "no check should panic on {base}-safe; got: {safe_panics:#?}"
@@ -93,8 +94,10 @@ fn reentrancy_fixtures() {
 
 #[test]
 fn contract_deployment_vulnerable_still_triggers_check() {
-    let (findings, _, _, _) = scan_directory(&fixture_path("contract-deployment-vulnerable"), &[], &[])
-        .unwrap_or_else(|error| panic!("failed to scan contract-deployment-vulnerable: {error}"));
+    let (findings, _, _, _) =
+        scan_directory(&fixture_path("contract-deployment-vulnerable"), &[], &[]).unwrap_or_else(
+            |error| panic!("failed to scan contract-deployment-vulnerable: {error}"),
+        );
     assert!(
         findings
             .iter()
@@ -108,7 +111,9 @@ fn token_amount_vulnerable_still_triggers_check() {
     let (findings, _, _, _) = scan_directory(&fixture_path("token-amount-vulnerable"), &[], &[])
         .unwrap_or_else(|error| panic!("failed to scan token-amount-vulnerable: {error}"));
     assert!(
-        findings.iter().any(|f| f.check_name == "unchecked-token-amount"),
+        findings
+            .iter()
+            .any(|f| f.check_name == "unchecked-token-amount"),
         "token-amount-vulnerable did not produce unchecked-token-amount; findings: {findings:#?}"
     );
 }
@@ -118,7 +123,9 @@ fn upgrade_vulnerable_still_triggers_check() {
     let (findings, _, _, _) = scan_directory(&fixture_path("upgrade-vulnerable"), &[], &[])
         .unwrap_or_else(|error| panic!("failed to scan upgrade-vulnerable: {error}"));
     assert!(
-        findings.iter().any(|f| f.check_name == "unprotected-upgrade"),
+        findings
+            .iter()
+            .any(|f| f.check_name == "unprotected-upgrade"),
         "upgrade-vulnerable did not produce unprotected-upgrade; findings: {findings:#?}"
     );
 }
@@ -126,18 +133,21 @@ fn upgrade_vulnerable_still_triggers_check() {
 #[test]
 fn cli_scan_path_does_not_emit_duplicate_findings() {
     let checks = default_checks_with_config(&[], &[]);
-    let (results, _, _, _) = scan_directory_with_checks(
-        &fixture_path("reentrancy-vulnerable"),
-        &[],
-        &[],
-        &checks,
-    )
-    .expect("failed to scan reentrancy-vulnerable");
+    let (results, _, _, _) =
+        scan_directory_with_checks(&fixture_path("reentrancy-vulnerable"), &[], &[], &checks)
+            .expect("failed to scan reentrancy-vulnerable");
 
-    let findings: Vec<_> = results.into_iter().flat_map(|result| result.findings).collect();
+    let findings: Vec<_> = results
+        .into_iter()
+        .flat_map(|result| result.findings)
+        .collect();
     let mut keys = std::collections::HashSet::new();
     for finding in findings {
-        let key = (finding.file_path.clone(), finding.line, finding.check_name.clone());
+        let key = (
+            finding.file_path.clone(),
+            finding.line,
+            finding.check_name.clone(),
+        );
         assert!(
             keys.insert(key),
             "CLI scan emitted duplicate finding: {finding:?}"
@@ -220,6 +230,18 @@ fn invoke_return_fixtures() {
 #[test]
 fn event_fixtures() {
     assert_fixture_pair("event", "missing-event-emission");
+}
+
+#[test]
+fn admin_event_safe_produces_no_findings() {
+    let (findings, _, _, _) = scan_directory(&fixture_path("admin-event-safe"), &[], &[])
+        .unwrap_or_else(|error| panic!("failed to scan admin-event-safe: {error}"));
+    assert!(
+        findings
+            .iter()
+            .all(|f| f.check_name != "missing-event-for-admin-change"),
+        "admin-event-safe unexpectedly produced missing-event-for-admin-change; findings: {findings:#?}"
+    );
 }
 
 #[test]
