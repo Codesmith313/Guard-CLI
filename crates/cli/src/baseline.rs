@@ -197,4 +197,13 @@ mod tests {
         let b = vec![finding("check-a", "a.rs", "foo", "new wording")];
         assert_eq!(fingerprint_findings(&a), fingerprint_findings(&b));
     }
+
+    #[test]
+    fn test_rfc3339_now_format() {
+        let ts = rfc3339_now();
+        assert!(ts.ends_with('Z'));
+        assert_eq!(ts.len(), 20);
+        assert_eq!(&ts[4..5], "-");
+        assert_eq!(&ts[10..11], "T");
+    }
 }
