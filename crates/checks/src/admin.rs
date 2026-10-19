@@ -1,8 +1,8 @@
 //! Privileged-style entrypoints without any `require_auth` / `require_auth_for_args` call.
 
 use crate::util::{
-    contractimpl_functions_excluding_test, pat_ident_name, receiver_chain_contains,
-    receiver_chain_contains_storage,
+    contractimpl_functions_excluding_test, is_admin_var_name, pat_ident_name,
+    receiver_chain_contains, receiver_chain_contains_storage,
 };
 use crate::{Check, Finding, Severity};
 use syn::spanned::Spanned;
@@ -236,7 +236,7 @@ impl<'ast> Visit<'ast> for AuthGateScan {
                     && receiver_chain_contains(&init.expr, "get")
                 {
                     if let Some(var_name) = pat_ident_name(&local.pat) {
-                        if is_privileged_name(&var_name) {
+                        if is_admin_var_name(&var_name) {
                             self.storage_read_vars.insert(var_name);
                         }
                     }
