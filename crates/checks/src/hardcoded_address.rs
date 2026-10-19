@@ -186,6 +186,21 @@ mod tests {
     use crate::Check;
     use syn::parse_file;
 
+    /// Issue #733: the vulnerable fixture must demonstrate both the `G…` and the
+    /// `C…` detection its comments describe. A literal one character too long
+    /// fails the boundary checks and is silently never matched.
+    #[test]
+    fn vulnerable_fixture_flags_both_g_and_c_literals() -> Result<(), syn::Error> {
+        let source =
+            include_str!("../../../test-contracts/hardcoded-address-vulnerable/src/lib.rs");
+        let file = parse_file(source)?;
+        let findings = HardcodedAddressCheck.run(&file, source);
+        let mut flagged: Vec<&str> = findings.iter().map(|f| f.function_name.as_str()).collect();
+        flagged.sort_unstable();
+        assert_eq!(flagged, ["get_admin", "get_token"], "{findings:#?}");
+        Ok(())
+    }
+
     #[test]
     fn flags_hardcoded_address_in_string_literal() -> Result<(), syn::Error> {
         let key = format!("G{}", "A".repeat(55));
