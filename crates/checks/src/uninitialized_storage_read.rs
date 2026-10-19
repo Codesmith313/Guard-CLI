@@ -45,9 +45,6 @@ fn is_storage_has(expr: &Expr) -> bool {
     }
 }
 
-/// Returns true when `expr` is a `.get(…)`/`.get_unchecked(…)` call on a
-/// storage receiver chain — i.e. a raw storage read that returns `Option<T>`.
-fn is_storage_get(expr: &Expr) -> bool {
 /// Returns `true` when the block contains a `.has(&key)` call on a storage
 /// receiver where the key argument token-text matches `read_key_text` AND
 /// the `.has()` call appears **before** the line of the unsafe read
