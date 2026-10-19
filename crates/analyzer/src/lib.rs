@@ -138,7 +138,6 @@ impl CheckPanicReport {
     }
 }
 
-
 #[derive(Default)]
 struct Suppressions {
     line_checks: HashSet<(usize, String)>,
@@ -274,6 +273,23 @@ fn is_suppressed(finding: &Finding, suppressions: &Suppressions, fn_spans: &[FnS
         lookup_fn_name.to_string(),
         finding.check_name.clone(),
     ))
+}
+
+/// The path relative to `root` shown in findings: the bare file name when `root`
+/// itself is a single file, otherwise the path stripped of the `root` prefix.
+/// Shared by every scan entry point so the copies of this logic can't drift (issue #630).
+fn file_label(path: &Path, root: &Path) -> String {
+    if root.is_file() {
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    } else {
+        path.strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string()
+    }
 }
 
 /// Drop only findings that are identical in everything a reader would use to tell
@@ -651,7 +667,6 @@ pub fn scan_directory_with_checks(
     Ok((results, files_scanned, files_skipped, check_panics))
 }
 
-
 /// Scan an explicit list of `.rs` file paths and aggregate findings from every default check.
 ///
 /// Applies the same per-file filter as [`scan_directory`] via [`classify_rust_path`]:
@@ -756,12 +771,19 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-symlink-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("shared")).unwrap();
         fs::create_dir_all(root.join("contract/src")).unwrap();
         fs::write(root.join("shared/token.rs"), "pub fn shared_source() {}\n").unwrap();
-        symlink(root.join("shared/token.rs"), root.join("contract/src/token.rs")).unwrap();
+        symlink(
+            root.join("shared/token.rs"),
+            root.join("contract/src/token.rs"),
+        )
+        .unwrap();
 
         let (_, files_scanned, files_skipped, check_panics) =
             scan_directory(&root.join("contract"), &[], &[]).unwrap();
@@ -776,7 +798,10 @@ mod tests {
         let missing = std::env::temp_dir().join(format!(
             "soroban-guard-missing-root-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let err = scan_directory(&missing, &[], &[]).unwrap_err();
         let msg = err.to_string();
@@ -888,7 +913,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-nodup-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn f() {}").unwrap();
@@ -909,14 +937,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-exclude-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/keep.rs"), "pub fn keep() {}").unwrap();
         fs::write(root.join("src/drop.rs"), "pub fn drop_me() {}").unwrap();
 
-        let (paths, _) =
-            collect_rust_paths(&root, &["src/drop.rs".to_string()], &[]).unwrap();
+        let (paths, _) = collect_rust_paths(&root, &["src/drop.rs".to_string()], &[]).unwrap();
 
         assert_eq!(paths, vec![root.join("src/keep.rs")]);
         fs::remove_dir_all(root).unwrap();
@@ -927,14 +957,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-include-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/a.rs"), "pub fn a() {}").unwrap();
         fs::write(root.join("src/b.rs"), "pub fn b() {}").unwrap();
 
-        let (paths, _) =
-            collect_rust_paths(&root, &[], &["src/a.rs".to_string()]).unwrap();
+        let (paths, _) = collect_rust_paths(&root, &[], &["src/a.rs".to_string()]).unwrap();
 
         assert_eq!(paths, vec![root.join("src/a.rs")]);
         fs::remove_dir_all(root).unwrap();
@@ -945,7 +977,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-generated-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
@@ -1168,7 +1203,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-multi-parse-error-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/a_broken.rs"), "pub fn a( {{{").unwrap();
@@ -1181,7 +1219,10 @@ mod tests {
                 ScanError::Multiple(errs) => {
                     assert_eq!(errs.len(), 2, "expected both broken files reported");
                     let paths: Vec<PathBuf> = errs.iter().map(scan_error_path).collect();
-                    assert!(paths.windows(2).all(|w| w[0] <= w[1]), "not sorted: {paths:?}");
+                    assert!(
+                        paths.windows(2).all(|w| w[0] <= w[1]),
+                        "not sorted: {paths:?}"
+                    );
                     assert!(paths
                         .iter()
                         .any(|p| p.to_string_lossy().ends_with("a_broken.rs")));
@@ -1816,7 +1857,10 @@ mod dedup_tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-division-validated-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(

@@ -137,11 +137,8 @@ fn run_scan(
 ) -> i32 {
     match scan_directory_with_checks(&opts.path, &opts.exclude, &opts.includes, active_checks) {
         Ok((results, files_scanned, files_skipped, _check_panics)) => {
-            let findings: Vec<Finding> =
-                results.into_iter().flat_map(|r| r.findings).collect();
-            let should_fail = findings
-                .iter()
-                .any(|f| f.severity <= opts.fail_threshold);
+            let findings: Vec<Finding> = results.into_iter().flat_map(|r| r.findings).collect();
+            let should_fail = findings.iter().any(|f| f.severity <= opts.fail_threshold);
 
             // Produce the serialized payload for the selected structured format,
             // then emit it via a single shared write-or-print path (Issue #430).
@@ -339,7 +336,7 @@ fn main() {
             } else {
                 // Try to load soroban-guard.toml from current directory to get default path.
                 let config_for_default = match config::load(&PathBuf::from(".")) {
-                    Ok(c) => c.unwrap_or_default(),
+                    Ok((c, _)) => c.unwrap_or_default(),
                     Err(e) => {
                         eprintln!("{} {}", "error:".red().bold(), e);
                         std::process::exit(2);
@@ -517,7 +514,10 @@ fn main() {
                                             EventKind::Create(_)
                                                 | EventKind::Modify(_)
                                                 | EventKind::Remove(_)
-                                        ) && e.paths.iter().any(|path| is_relevant_watch_path(path));
+                                        ) && e
+                                            .paths
+                                            .iter()
+                                            .any(|path| is_relevant_watch_path(path));
                                         if !relevant {
                                             continue;
                                         }

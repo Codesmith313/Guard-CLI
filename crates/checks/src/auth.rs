@@ -2,13 +2,13 @@
 
 use crate::util::{
     address_param_names, contractimpl_functions_excluding_test, env_param_name,
-    is_storage_mutation_call, receiver_is_auth_gate, type_is_address, type_is_env,
+    is_storage_mutation_call, receiver_is_auth_gate, type_is_address,
 };
 use crate::{Check, Finding, Severity};
 use std::collections::HashSet;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Block, Expr, ExprMethodCall, File, FnArg, Pat, Stmt, Type};
+use syn::{Block, Expr, ExprMethodCall, File, Pat, Stmt};
 
 const CHECK_NAME: &str = "missing-require-auth";
 
