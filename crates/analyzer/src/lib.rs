@@ -138,7 +138,6 @@ impl CheckPanicReport {
     }
 }
 
-
 #[derive(Default)]
 struct Suppressions {
     line_checks: HashSet<(usize, String)>,
@@ -274,6 +273,23 @@ fn is_suppressed(finding: &Finding, suppressions: &Suppressions, fn_spans: &[FnS
         lookup_fn_name.to_string(),
         finding.check_name.clone(),
     ))
+}
+
+/// The path relative to `root` shown in findings: the bare file name when `root`
+/// itself is a single file, otherwise the path stripped of the `root` prefix.
+/// Shared by every scan entry point so the copies of this logic can't drift (issue #630).
+fn file_label(path: &Path, root: &Path) -> String {
+    if root.is_file() {
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    } else {
+        path.strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string()
+    }
 }
 
 /// Drop only findings that are identical in everything a reader would use to tell
@@ -485,21 +501,28 @@ fn collect_rust_paths(
             // checkout, a broken symlink, a race with WalkDir's listing). Warn naming the
             // path and skip it, matching the warn-and-continue precedent for check panics.
             Err(e) => {
-                let err = match &e {
-                    ScanError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
-                        ScanError::PermissionDenied {
-                            path: path.to_path_buf(),
-                        }
-                    }
-                    _ => e,
-                };
-                eprintln!("warning: {err}, skipping file");
+                warn_skipping_unreadable(path, e);
                 continue;
             }
         }
     }
 
     Ok((paths, files_skipped))
+}
+
+/// Report a file that could not be classified (unreadable, vanished, a broken
+/// symlink) and let the caller skip it. Shared by [`collect_rust_paths`] and
+/// [`scan_files`] so both treat one bad file the same way: warn, don't abort.
+fn warn_skipping_unreadable(path: &Path, e: ScanError) {
+    let err = match &e {
+        ScanError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
+            ScanError::PermissionDenied {
+                path: path.to_path_buf(),
+            }
+        }
+        _ => e,
+    };
+    eprintln!("warning: {err}, skipping file");
 }
 
 fn run_checks_for_file(
@@ -651,6 +674,24 @@ pub fn scan_directory_with_checks(
     Ok((results, files_scanned, files_skipped, check_panics))
 }
 
+/// Report-friendly path: lossy UTF-8 with `/` separators on every platform.
+fn path_to_report_string(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+/// Label a finding's file relative to the scan root (or by file name when the
+/// root is itself a file).
+fn file_label(path: &Path, root: &Path) -> String {
+    if root.is_file() {
+        path.file_name()
+            .map(Path::new)
+            .map(path_to_report_string)
+            .unwrap_or_default()
+    } else {
+        path_to_report_string(path.strip_prefix(root).unwrap_or(path))
+    }
+}
 
 /// Report-friendly path: lossy UTF-8 with `/` separators on every platform.
 fn path_to_report_string(path: &Path) -> String {
@@ -680,7 +721,8 @@ fn file_label(path: &Path, root: &Path) -> String {
 ///
 /// `root` is used to compute the relative label matched against the globs and shown in
 /// findings. The one difference from [`scan_directory`] is that this does not walk a
-/// directory: only the paths passed in are considered.
+/// directory: only the paths passed in are considered. As in [`scan_directory`], a path
+/// that cannot be read is reported on stderr and skipped rather than failing the call.
 ///
 /// Returns `(findings, files_scanned, files_skipped, check_panics)` where `check_panics`
 /// lists every check that panicked during the scan (see [`CheckPanicReport`]).
@@ -699,10 +741,13 @@ pub fn scan_files(
     for path in paths {
         let path_canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let label = path_canon.strip_prefix(&root).unwrap_or(&path_canon);
-        match classify_rust_path(&path_canon, label, &exclude_patterns, &include_patterns)? {
-            PathVerdict::Scan => selected.push(path_canon),
-            PathVerdict::GeneratedSkip => files_skipped += 1,
-            PathVerdict::Reject => {}
+        match classify_rust_path(&path_canon, label, &exclude_patterns, &include_patterns) {
+            Ok(PathVerdict::Scan) => selected.push(path_canon),
+            Ok(PathVerdict::GeneratedSkip) => files_skipped += 1,
+            Ok(PathVerdict::Reject) => {}
+            // Same as `scan_directory`: one unreadable path in the list is
+            // skipped with a warning instead of failing the whole batch.
+            Err(e) => warn_skipping_unreadable(&path_canon, e),
         }
     }
 
@@ -775,12 +820,19 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-symlink-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("shared")).unwrap();
         fs::create_dir_all(root.join("contract/src")).unwrap();
         fs::write(root.join("shared/token.rs"), "pub fn shared_source() {}\n").unwrap();
-        symlink(root.join("shared/token.rs"), root.join("contract/src/token.rs")).unwrap();
+        symlink(
+            root.join("shared/token.rs"),
+            root.join("contract/src/token.rs"),
+        )
+        .unwrap();
 
         let (_, files_scanned, files_skipped, check_panics) =
             scan_directory(&root.join("contract"), &[], &[]).unwrap();
@@ -795,7 +847,10 @@ mod tests {
         let missing = std::env::temp_dir().join(format!(
             "soroban-guard-missing-root-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let err = scan_directory(&missing, &[], &[]).unwrap_err();
         let msg = err.to_string();
@@ -907,7 +962,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-nodup-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn f() {}").unwrap();
@@ -928,14 +986,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-exclude-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/keep.rs"), "pub fn keep() {}").unwrap();
         fs::write(root.join("src/drop.rs"), "pub fn drop_me() {}").unwrap();
 
-        let (paths, _) =
-            collect_rust_paths(&root, &["src/drop.rs".to_string()], &[]).unwrap();
+        let (paths, _) = collect_rust_paths(&root, &["src/drop.rs".to_string()], &[]).unwrap();
 
         assert_eq!(paths, vec![root.join("src/keep.rs")]);
         fs::remove_dir_all(root).unwrap();
@@ -946,14 +1006,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-include-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/a.rs"), "pub fn a() {}").unwrap();
         fs::write(root.join("src/b.rs"), "pub fn b() {}").unwrap();
 
-        let (paths, _) =
-            collect_rust_paths(&root, &[], &["src/a.rs".to_string()]).unwrap();
+        let (paths, _) = collect_rust_paths(&root, &[], &["src/a.rs".to_string()]).unwrap();
 
         assert_eq!(paths, vec![root.join("src/a.rs")]);
         fs::remove_dir_all(root).unwrap();
@@ -964,7 +1026,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-collect-generated-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
@@ -1020,6 +1085,60 @@ mod tests {
     /// One unreadable `.rs` file must not abort the scan: findings for the readable
     /// files are still returned. Unix-only (relies on POSIX mode bits); skipped when
     /// running as root, where the mode bits do not deny access.
+    /// Issue #720: `scan_files` must skip an unreadable path like
+    /// `scan_directory` does, not fail the whole batch.
+    #[cfg(unix)]
+    #[test]
+    fn scan_files_skips_unreadable_file_instead_of_aborting() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "soroban-guard-scanfiles-unreadable-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let readable = root.join("src/readable.rs");
+        fs::write(
+            &readable,
+            "#[contract]\npub struct C;\n#[contractimpl]\nimpl C {\n    pub fn bump(env: Env) {\n        env.storage().instance().set(&1u32, &2u32);\n    }\n}\n",
+        )
+        .unwrap();
+
+        let unreadable = root.join("src/unreadable.rs");
+        fs::write(&unreadable, "pub fn secret() {}").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Running as root can still read it; the scenario does not exist then.
+        if fs::read_to_string(&unreadable).is_ok() {
+            let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
+            fs::remove_dir_all(&root).unwrap();
+            return;
+        }
+
+        let result = scan_files(&[unreadable.clone(), readable], &root, &[], &[]);
+        let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
+        fs::remove_dir_all(&root).unwrap();
+
+        let (findings, files_scanned, _, check_panics) =
+            result.expect("one unreadable path must not abort scan_files");
+        assert_eq!(
+            files_scanned, 1,
+            "the readable file should still be scanned"
+        );
+        assert!(check_panics.is_empty());
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.check_name == "missing-require-auth"),
+            "expected a finding from the readable file, got {findings:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_file_does_not_abort_scan() {
@@ -1187,7 +1306,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-multi-parse-error-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/a_broken.rs"), "pub fn a( {{{").unwrap();
@@ -1200,7 +1322,10 @@ mod tests {
                 ScanError::Multiple(errs) => {
                     assert_eq!(errs.len(), 2, "expected both broken files reported");
                     let paths: Vec<PathBuf> = errs.iter().map(scan_error_path).collect();
-                    assert!(paths.windows(2).all(|w| w[0] <= w[1]), "not sorted: {paths:?}");
+                    assert!(
+                        paths.windows(2).all(|w| w[0] <= w[1]),
+                        "not sorted: {paths:?}"
+                    );
                     assert!(paths
                         .iter()
                         .any(|p| p.to_string_lossy().ends_with("a_broken.rs")));
@@ -1835,7 +1960,10 @@ mod dedup_tests {
         let root = std::env::temp_dir().join(format!(
             "soroban-guard-division-validated-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
