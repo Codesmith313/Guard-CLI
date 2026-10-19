@@ -485,21 +485,28 @@ fn collect_rust_paths(
             // checkout, a broken symlink, a race with WalkDir's listing). Warn naming the
             // path and skip it, matching the warn-and-continue precedent for check panics.
             Err(e) => {
-                let err = match &e {
-                    ScanError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
-                        ScanError::PermissionDenied {
-                            path: path.to_path_buf(),
-                        }
-                    }
-                    _ => e,
-                };
-                eprintln!("warning: {err}, skipping file");
+                warn_skipping_unreadable(path, e);
                 continue;
             }
         }
     }
 
     Ok((paths, files_skipped))
+}
+
+/// Report a file that could not be classified (unreadable, vanished, a broken
+/// symlink) and let the caller skip it. Shared by [`collect_rust_paths`] and
+/// [`scan_files`] so both treat one bad file the same way: warn, don't abort.
+fn warn_skipping_unreadable(path: &Path, e: ScanError) {
+    let err = match &e {
+        ScanError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
+            ScanError::PermissionDenied {
+                path: path.to_path_buf(),
+            }
+        }
+        _ => e,
+    };
+    eprintln!("warning: {err}, skipping file");
 }
 
 fn run_checks_for_file(
@@ -651,7 +658,6 @@ pub fn scan_directory_with_checks(
     Ok((results, files_scanned, files_skipped, check_panics))
 }
 
-
 /// Report-friendly path: lossy UTF-8 with `/` separators on every platform.
 fn path_to_report_string(path: &Path) -> String {
     path.to_string_lossy()
@@ -680,7 +686,8 @@ fn file_label(path: &Path, root: &Path) -> String {
 ///
 /// `root` is used to compute the relative label matched against the globs and shown in
 /// findings. The one difference from [`scan_directory`] is that this does not walk a
-/// directory: only the paths passed in are considered.
+/// directory: only the paths passed in are considered. As in [`scan_directory`], a path
+/// that cannot be read is reported on stderr and skipped rather than failing the call.
 ///
 /// Returns `(findings, files_scanned, files_skipped, check_panics)` where `check_panics`
 /// lists every check that panicked during the scan (see [`CheckPanicReport`]).
@@ -699,10 +706,13 @@ pub fn scan_files(
     for path in paths {
         let path_canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let label = path_canon.strip_prefix(&root).unwrap_or(&path_canon);
-        match classify_rust_path(&path_canon, label, &exclude_patterns, &include_patterns)? {
-            PathVerdict::Scan => selected.push(path_canon),
-            PathVerdict::GeneratedSkip => files_skipped += 1,
-            PathVerdict::Reject => {}
+        match classify_rust_path(&path_canon, label, &exclude_patterns, &include_patterns) {
+            Ok(PathVerdict::Scan) => selected.push(path_canon),
+            Ok(PathVerdict::GeneratedSkip) => files_skipped += 1,
+            Ok(PathVerdict::Reject) => {}
+            // Same as `scan_directory`: one unreadable path in the list is
+            // skipped with a warning instead of failing the whole batch.
+            Err(e) => warn_skipping_unreadable(&path_canon, e),
         }
     }
 
@@ -1020,6 +1030,60 @@ mod tests {
     /// One unreadable `.rs` file must not abort the scan: findings for the readable
     /// files are still returned. Unix-only (relies on POSIX mode bits); skipped when
     /// running as root, where the mode bits do not deny access.
+    /// Issue #720: `scan_files` must skip an unreadable path like
+    /// `scan_directory` does, not fail the whole batch.
+    #[cfg(unix)]
+    #[test]
+    fn scan_files_skips_unreadable_file_instead_of_aborting() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "soroban-guard-scanfiles-unreadable-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let readable = root.join("src/readable.rs");
+        fs::write(
+            &readable,
+            "#[contract]\npub struct C;\n#[contractimpl]\nimpl C {\n    pub fn bump(env: Env) {\n        env.storage().instance().set(&1u32, &2u32);\n    }\n}\n",
+        )
+        .unwrap();
+
+        let unreadable = root.join("src/unreadable.rs");
+        fs::write(&unreadable, "pub fn secret() {}").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Running as root can still read it; the scenario does not exist then.
+        if fs::read_to_string(&unreadable).is_ok() {
+            let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
+            fs::remove_dir_all(&root).unwrap();
+            return;
+        }
+
+        let result = scan_files(&[unreadable.clone(), readable], &root, &[], &[]);
+        let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
+        fs::remove_dir_all(&root).unwrap();
+
+        let (findings, files_scanned, _, check_panics) =
+            result.expect("one unreadable path must not abort scan_files");
+        assert_eq!(
+            files_scanned, 1,
+            "the readable file should still be scanned"
+        );
+        assert!(check_panics.is_empty());
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.check_name == "missing-require-auth"),
+            "expected a finding from the readable file, got {findings:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_file_does_not_abort_scan() {
