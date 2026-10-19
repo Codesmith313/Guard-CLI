@@ -180,7 +180,7 @@ Soroban contracts compile to WASM with `#![no_std]`. Importing from `std` causes
 
 **What it detects**
 
-A string literal anywhere in the file that matches the shape of a Stellar `StrKey` address — a 56-character base32 run starting with `G` (Ed25519 public key) or `C` (Soroban contract address), bounded by non-alphanumeric characters on both sides. Works on the raw source text rather than the parsed AST, so it catches addresses regardless of which expression they appear in.
+A string literal anywhere in the file that matches the shape of a Stellar `StrKey` address — a 56-character base32 run starting with `G` (Ed25519 public key) or `C` (Soroban contract address), bounded by non-alphanumeric characters on both sides. Works on the raw source text rather than the parsed AST, so it catches addresses regardless of which expression they appear in. Test-only code is skipped: modules gated by `#[cfg(test)]` (including `cfg(all(test, …))`) or named `tests`/`test`, and items marked `#[cfg(test)]` or `#[test]`.
 
 **Why it matters**
 
